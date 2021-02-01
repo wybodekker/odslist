@@ -1,0 +1,196 @@
+#!/usr/bin/env ruby
+# encoding: utf-8
+# todo: make options:
+# 	-r,--rows=list
+#	-c,--cols=list
+
+Version='1.05'
+MYNAME = File.basename($0)
+
+require 'optparse'
+begin
+  # This causes a warning that can be silenced by setting the 
+  # environment variable THOR_SILENCE_DEPRECATION 
+  # Maybe better to re-program using the gem rods?
+  require 'ods'
+rescue LoadError
+  raise LoadError,<<EOF,['ods.rb']
+\n    You probably did not install ods.rb. 
+    Install with: sudo gem install -r ods
+EOF
+end
+
+<<'DOC'
+= odslist - List the contents of an OpenDocument Spreadsheet
+= Synopsis
+words [options] files	
+
+== Options
+
+-s,--sheets=list	List the sheets in the comma separated |list| of
+			sheet names or numbers.
+			By default, all sheets are listed.
+			Sheets are counted from 1 up.
+-n,--newline=s		Replace newlines wit |s| in multiline cells.
+			Default: |\n\t|.
+-m,--maxcols=n		Print |n| columns. 
+			Default: strip empty cells from the end of the row.
+-c,--comma		Separate fields with comma and quote fields.
+-v,--verbose		Print header above each sheet.
+-V,--version		Print version (1.01) and exit.
+-h,--help		Print this help and exit.
+   
+= Description
+odslist lists the contents of an OpenDocument Spreadsheet as
+tab-separated, unquoted cells. With the |--verbose| option, a header
+line is printed above each sheet, containing the number of the sheet
+and its name.
+
+= Author
+[Wybo Dekker](wybo@dekkerdocumenten.nl)
+
+= Copyright
+Released under the [GNU General Public License](www.gnu.org/copyleft/gpl.html)
+DOC
+
+module Ods
+  class Cell
+
+    def value
+      value_type = content['office:value-type']
+      case value_type
+        when nil, 'string', 'currency'
+          text
+        when 'date'
+          Date.strptime(content['office:date-value'], "%Y-%m-%d")
+        when 'boolean'
+          content['office:boolean-value'] == 'true' ? true : false
+        when 'float'
+          str = content['office:value']
+          if str.match(/\./)
+            str.to_f
+          else
+            str.to_i
+          end
+        when 'percentage'
+          content['office:value'].to_f
+        else
+          warn "Unknown type: #{value_type} [#{text}]"
+          text
+      end
+    end
+  end
+end
+
+  newline = "\n\t"
+separator = "\t"
+ surround = ''
+  verbose = false
+ mysheets = []
+  maxcols = 0
+
+OptionParser.new(
+  banner = "#{MYNAME} - List the contents of all sheets of an OpenDocument Spreadsheet\n\n",
+   width = 18,
+  indent =''
+) do |opt|
+   opt.banner << "Usage: #{MYNAME} [options] file\n\n"
+ 
+   opt.on('-s','--sheets=list',String,
+	'List the sheets in the comma separated |list|.',
+	'By default, all sheets are listed',
+        'The list may contain sheet numbers (counting from 1 up)',
+        'or sheet names'
+   ) do |v|
+      mysheets = v.split(',')
+   end
+   opt.on('-n','--newline=s',String,
+	'replace newlines wit |s| in multiline cells',
+	'Default: \n\t'
+   ) do |v|
+      newline = v
+   end
+   opt.on('-m','--maxcols=n',Integer,
+          'Print |n| columns.',
+          'Default: strip empty cells from the end of the row.'
+   ) do |v|
+      maxcols = v.to_i
+   end
+   opt.on('-v','--verbose','print header above each sheet'
+   ) do
+      verbose = true
+   end
+   opt.on('-c','--comma','set field separator comma and doublequote fields'
+   ) do
+	separator = '","'
+        surround = '"'
+   end
+   opt.on('-V','--version',"print version (#{Version}) and exit"
+   ) do
+      puts Version
+      exit
+   end
+   opt.on('-h','--help','print this help and exit') do
+      puts opt.to_s.sub(/^ *-I\n/,'')
+      exit
+   end
+   opt.on('-I') do
+      system("instscript #{MYNAME}")
+      exit 0
+   end
+   opt.parse!
+end
+
+def die(m)
+   STDERR.puts "#{MYNAME}: #{m}"
+   exit 1
+end
+
+file = ARGV[0] or die "I need an .ods file"
+file =~ /\.ods$/ or die "My input file needs a .ods extension"
+
+allsheets = Ods::File.new(file).sheets
+ns = allsheets.size
+if mysheets.empty?
+   mysheets = (0...ns).to_a
+else
+   mysheets.map! do |i|
+      if i =~ /^\d+$/
+         i = i.to_i
+         if i.between?(1,ns)
+            i-1
+         else
+            die "List contains a value (#{i}) outside the range of available sheets (1-#{ns})"
+         end
+      else
+         rep = nil
+         (0...ns).each do |j|
+            if allsheets[j].name == i
+               rep = j
+               break
+            end
+         end
+         die "no sheet named «#{i}» was found" unless rep
+         rep
+      end
+   end
+end
+
+mysheets.each do |i|
+   s = allsheets[i]
+   puts "==== Sheet #{i+1}: #{s.name} ====" if verbose
+   s.rows.each do |r|
+      c = r.cols # size is equal to size of largest row (nmax) in the sheet
+      if maxcols == 0
+         while c.size > 0  && c[-1].text.empty?
+            c.pop
+         end
+      else
+         # remove excess cols; there may be less than maxcols cols now!
+         c = c[0...maxcols]
+      end
+      c = c.map { |k| k.content.children.map { |i| i.text }.join(newline)}
+      c.push('') while c.size < maxcols 
+      puts surround+c.join(separator)+surround
+   end
+end
