@@ -1,4 +1,5 @@
 #!/usr/bin/env ruby
+
 # encoding: utf-8
 # todo: make options:
 # 	-r,--rows=list
@@ -93,10 +94,10 @@ OptionParser.new(
   banner = "#{MYNAME} - List the contents of all sheets of an OpenDocument Spreadsheet\n\n",
    width = 18,
   indent =''
-) do |opt|
-   opt.banner << "Usage: #{MYNAME} [options] file\n\n"
+) do |opts|
+   opts.banner << "Usage: #{MYNAME} [options] file\n\n"
  
-   opt.on('-s','--sheets=list',String,
+   opts.on('-s','--sheets=list',String,
 	'List the sheets in the comma separated |list|.',
 	'By default, all sheets are listed',
         'The list may contain sheet numbers (counting from 1 up)',
@@ -104,41 +105,41 @@ OptionParser.new(
    ) do |v|
       mysheets = v.split(',')
    end
-   opt.on('-n','--newline=s',String,
+   opts.on('-n','--newline=s',String,
 	'replace newlines wit |s| in multiline cells',
 	'Default: \n\t'
    ) do |v|
       newline = v
    end
-   opt.on('-m','--maxcols=n',Integer,
+   opts.on('-m','--maxcols=n',Integer,
           'Print |n| columns.',
           'Default: strip empty cells from the end of the row.'
    ) do |v|
       maxcols = v.to_i
    end
-   opt.on('-v','--verbose','print header above each sheet'
+   opts.on('-v','--verbose','print header above each sheet'
    ) do
       verbose = true
    end
-   opt.on('-c','--comma','set field separator comma and doublequote fields'
+   opts.on('-c','--comma','set field separator comma and doublequote fields'
    ) do
 	separator = '","'
         surround = '"'
    end
-   opt.on('-V','--version',"print version (#{Version}) and exit"
+   opts.on('-V','--version',"print version (#{Version}) and exit"
    ) do
       puts Version
       exit
    end
-   opt.on('-h','--help','print this help and exit') do
-      puts opt.to_s.sub(/^ *-I\n/,'')
+   opts.on('-h','--help','print this help and exit') do
+      puts opts.to_s.sub(/^ *-I\n/,'')
       exit
    end
-   opt.on('-I') do
+   opts.on('-I') do
       system("instscript #{MYNAME}")
       exit 0
    end
-   opt.parse!
+   opts.parse!
 end
 
 def die(m)
@@ -149,7 +150,11 @@ end
 file = ARGV[0] or die "I need an .ods file"
 file =~ /\.ods$/ or die "My input file needs a .ods extension"
 
+i=$VERBOSE
+$VERBOSE=nil # warning from nokogiri old version 
 allsheets = Ods::File.new(file).sheets
+$VERBOSE=i
+
 ns = allsheets.size
 if mysheets.empty?
    mysheets = (0...ns).to_a
@@ -189,7 +194,7 @@ mysheets.each do |i|
          # remove excess cols; there may be less than maxcols cols now!
          c = c[0...maxcols]
       end
-      c = c.map { |k| k.content.children.map { |i| i.text }.join(newline)}
+      c = c.map { |k| k.content.children.map { |l| l.text }.join(newline)}
       c.push('') while c.size < maxcols 
       puts surround+c.join(separator)+surround
    end
