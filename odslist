@@ -5,7 +5,7 @@
 # 	-r,--rows=list
 #	-c,--cols=list
 
-Version='1.05'
+Version='1.06'
 MYNAME = File.basename($0)
 
 require 'optparse'
@@ -163,7 +163,7 @@ else
       if i =~ /^\d+$/
          i = i.to_i
          if i.between?(1,ns)
-            i-1
+            i-=1
          else
             die "List contains a value (#{i}) outside the range of available sheets (1-#{ns})"
          end
