@@ -5,7 +5,7 @@
 |    type | ruby
 |  author | Wybo Dekker
 |   email | wybo@dekkerdocumenten.nl
-| version | 1.05
+| version | 1.06
 | license | GNU General Public License
 
 odslist lists the contents of an OpenDocument Spreadsheet as
