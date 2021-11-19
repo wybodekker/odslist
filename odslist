@@ -6,21 +6,25 @@
 #	-c,--cols=list
 
 Version='1.06'
-MYNAME = File.basename($0)
+Myname = File.basename($0)
 
 require 'optparse'
+require 'ostruct'
 begin
   # This causes a warning that can be silenced by setting the 
   # environment variable THOR_SILENCE_DEPRECATION 
   # Maybe better to re-program using the gem rods?
+  ENV['THOR_SILENCE_DEPRECATION'] == '1' or
+     raise 'Please set your environment variable THOR_SILENCE_DEPRECATION to 1'
   require 'ods'
 rescue LoadError
-  raise LoadError,<<EOF,['ods.rb']
-\n    You probably did not install ods.rb. 
+  raise LoadError,<<~EOD
+    \nYou probably did not install ods.rb. 
     Install with: sudo gem install -r ods
-EOF
+EOD
 end
 
+Help=
 <<'DOC'
 = odslist - List the contents of an OpenDocument Spreadsheet
 = Synopsis
@@ -83,19 +87,34 @@ module Ods
   end
 end
 
-  newline = "\n\t"
-separator = "\t"
- surround = ''
-  verbose = false
- mysheets = []
-  maxcols = 0
+def die(m)
+   STDERR.puts "#{Myname}: #{m}"
+   exit 1
+end
+
+def help
+  system("echo \"#{Help}\" | less -P#{Myname}-#{Version.tr('.','·')}")
+end
+
+# Option defaults
+$o = OpenStruct.new(
+  :newline => "\n\t",
+:separator => "\t",
+ :surround => '',
+  :verbose => false,
+ :mysheets => [],
+  :maxcols => 0,
+)
 
 OptionParser.new(
-  banner = "#{MYNAME} - List the contents of all sheets of an OpenDocument Spreadsheet\n\n",
+  banner = <<~EOD,
+	#{Myname} - List contents of OpenDocument spreadsheet\n
+	Usage: #{Myname} [options] file\n
+	Options:
+	EOD
    width = 18,
-  indent =''
+  indent = ''
 ) do |opts|
-   opts.banner << "Usage: #{MYNAME} [options] file\n\n"
  
    opts.on('-s','--sheets=list',String,
 	'List the sheets in the comma separated |list|.',
@@ -103,48 +122,63 @@ OptionParser.new(
         'The list may contain sheet numbers (counting from 1 up)',
         'or sheet names'
    ) do |v|
-      mysheets = v.split(',')
+      $o.mysheets = v.split(',')
    end
+
    opts.on('-n','--newline=s',String,
 	'replace newlines wit |s| in multiline cells',
 	'Default: \n\t'
    ) do |v|
-      newline = v
+      $o.newline = v
    end
+
    opts.on('-m','--maxcols=n',Integer,
           'Print |n| columns.',
           'Default: strip empty cells from the end of the row.'
    ) do |v|
-      maxcols = v.to_i
+      $o.maxcols = v.to_i
    end
-   opts.on('-v','--verbose','print header above each sheet'
+
+   opts.on('-v','--verbose',
+	'print header above each sheet'
    ) do
-      verbose = true
+      $o.verbose = true
    end
-   opts.on('-c','--comma','set field separator comma and doublequote fields'
+
+   opts.on('-c','--comma',
+	'set field separator to comma and doublequote fields'
    ) do
-	separator = '","'
-        surround = '"'
+	$o.separator = '","'
+        $o.surround = '"'
    end
-   opts.on('-V','--version',"print version (#{Version}) and exit"
+
+   opts.on('-V','--version',
+	'print version and exit'
    ) do
       puts Version
       exit
    end
-   opts.on('-h','--help','print this help and exit') do
+
+   opts.on('-h',
+	'print this help and exit'
+   ) do
       puts opts.to_s.sub(/^ *-I\n/,'')
       exit
    end
+
+   opts.on('-H','--help',
+	'show full documentation (use less!) and exit'
+   ) do
+      help
+      exit
+   end
+
    opts.on('-I') do
-      system("instscript #{MYNAME}")
+      system("instscript #{Myname}")
       exit 0
    end
-   opts.parse!
-end
 
-def die(m)
-   STDERR.puts "#{MYNAME}: #{m}"
-   exit 1
+   opts.parse!
 end
 
 file = ARGV[0] or die "I need an .ods file"
@@ -156,10 +190,10 @@ allsheets = Ods::File.new(file).sheets
 $VERBOSE=i
 
 ns = allsheets.size
-if mysheets.empty?
-   mysheets = (0...ns).to_a
+if $o.mysheets.empty?
+   $o.mysheets = (0...ns).to_a
 else
-   mysheets.map! do |i|
+   $o.mysheets.map! do |i|
       if i =~ /^\d+$/
          i = i.to_i
          if i.between?(1,ns)
@@ -181,21 +215,21 @@ else
    end
 end
 
-mysheets.each do |i|
+$o.mysheets.each do |i|
    s = allsheets[i]
-   puts "==== Sheet #{i+1}: #{s.name} ====" if verbose
+   puts "==== Sheet #{i+1}: #{s.name} ====" if $o.verbose
    s.rows.each do |r|
       c = r.cols # size is equal to size of largest row (nmax) in the sheet
-      if maxcols == 0
+      if $o.maxcols == 0
          while c.size > 0  && c[-1].text.empty?
             c.pop
          end
       else
          # remove excess cols; there may be less than maxcols cols now!
-         c = c[0...maxcols]
+         c = c[0...$o.maxcols]
       end
-      c = c.map { |k| k.content.children.map { |l| l.text }.join(newline)}
-      c.push('') while c.size < maxcols 
-      puts surround+c.join(separator)+surround
+      c = c.map { |k| k.content.children.map { |l| l.text }.join($o.newline)}
+      c.push('') while c.size < $o.maxcols 
+      puts $o.surround+c.join($o.separator)+$o.surround
    end
 end
