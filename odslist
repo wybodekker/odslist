@@ -184,10 +184,7 @@ end
 file = ARGV[0] or die "I need an .ods file"
 file =~ /\.ods$/ or die "My input file needs a .ods extension"
 
-i=$VERBOSE
-$VERBOSE=nil # warning from nokogiri old version 
 allsheets = Ods::File.new(file).sheets
-$VERBOSE=i
 
 ns = allsheets.size
 if $o.mysheets.empty?
