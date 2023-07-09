@@ -5,24 +5,15 @@
 # 	-r,--rows=list
 #	-c,--cols=list
 
-Version='1.06'
+Version='1.07'
 Myname = File.basename($0)
 
 require 'optparse'
+require 'colorize'
 require 'ostruct'
-begin
-  # This causes a warning that can be silenced by setting the 
-  # environment variable THOR_SILENCE_DEPRECATION 
-  # Maybe better to re-program using the gem rods?
-  ENV['THOR_SILENCE_DEPRECATION'] == '1' or
-     raise 'Please set your environment variable THOR_SILENCE_DEPRECATION to 1'
-  require 'ods'
-rescue LoadError
-  raise LoadError,<<~EOD
-    \nYou probably did not install ods.rb. 
-    Install with: sudo gem install -r ods
-EOD
-end
+gem 'ods', '>=0.1.4' 
+require 'ods'
+require 'erb'
 
 Help=
 <<'DOC'
@@ -31,25 +22,37 @@ Help=
 words [options] files	
 
 == Options
-
--s,--sheets=list	List the sheets in the comma separated |list| of
-			sheet names or numbers.
-			By default, all sheets are listed.
-			Sheets are counted from 1 up.
--n,--newline=s		Replace newlines wit |s| in multiline cells.
-			Default: |\n\t|.
--m,--maxcols=n		Print |n| columns. 
-			Default: strip empty cells from the end of the row.
--c,--comma		Separate fields with comma and quote fields.
--v,--verbose		Print header above each sheet.
--V,--version		Print version (1.01) and exit.
--h,--help		Print this help and exit.
    
+    --sheets=LIST  List the sheets in the comma separated |LIST|.
+		   By default, all sheets are listed.
+		   The list may contain sheet numbers (counting from 1 up)
+		   or sheet names; if the list contains numbers only, all values
+		   are considered to be numbers; otherwise, all are seen as names.
+-c, --caption=STR  set caption to STR.
+-l, --label=STR	   set label to STR.
+-f, --format=STR   output format, one of:
+			csv
+			tabs
+			tabular
+			tabularx
+			tabulary
+			ctable
+			longtable
+			longtablex
+-s, --specs=STR	   column specs, space separated,
+		   last one repeated as needed.
+		   default: L for tabulary, else X, if possible, else l.
+-a, --article	   create compilable article document.
+-r, --rotate	   rotate the paper to landscap.
+-t, --thinrules	   separate rows with thin rules.
+-V, --version	   print version and exit.
+-h		   print this help and exit.
+-H, --help	   show full documentation (use less!) and exit.
+
+
 = Description
-odslist lists the contents of an OpenDocument Spreadsheet as
-tab-separated, unquoted cells. With the |--verbose| option, a header
-line is printed above each sheet, containing the number of the sheet
-and its name.
+odslist lists the contents of an OpenDocument Spreadsheet in one of
+several formats.
 
 = Author
 [Wybo Dekker](wybo@dekkerdocumenten.nl)
@@ -58,53 +61,99 @@ and its name.
 Released under the [GNU General Public License](www.gnu.org/copyleft/gpl.html)
 DOC
 
-module Ods
-  class Cell
-
-    def value
-      value_type = content['office:value-type']
-      case value_type
-        when nil, 'string', 'currency'
-          text
-        when 'date'
-          Date.strptime(content['office:date-value'], "%Y-%m-%d")
-        when 'boolean'
-          content['office:boolean-value'] == 'true' ? true : false
-        when 'float'
-          str = content['office:value']
-          if str.match(/\./)
-            str.to_f
-          else
-            str.to_i
-          end
-        when 'percentage'
-          content['office:value'].to_f
-        else
-          warn "Unknown type: #{value_type} [#{text}]"
-          text
-      end
-    end
-  end
-end
-
-def die(m)
-   STDERR.puts "#{Myname}: #{m}"
-   exit 1
+def die(*m) mess :red,*m; exit 1; end
+def Warn(*m) mess :magenta,*m; end
+def mess(color,*m)
+   name = Myname + ': '
+   m.each do |v|
+      STDERR.puts "#{name}#{v}".__send__(color)
+      name.gsub!(/./,' ')
+   end
 end
 
 def help
   system("echo \"#{Help}\" | less -P#{Myname}-#{Version.tr('.','·')}")
 end
 
+class Array
+  def rep(sep)
+    m = self.inject(0) {|i,v| i=[i,v.to_s.scan(sep).count].max }
+    return (0..m).map { |i|
+      self.map {|c| c.to_s.split(sep)[i] }
+    }
+  end
+end
+
+# test correctness of specs and extend to no. of columns
+def testspecs(s,ok,ncol)
+  # s: specs string to be tested
+  # ok: allowed specs
+  # ncol: no. of columns that need to be specified
+  return if ok.empty?           # tabs and csv formats need no specs
+  re = /([pm]{[^}]*})|[CJLRXYclr]/ # match col spec 
+
+  t,nnow,i = s.dup,0,0
+  while m = t.match(re)
+    m = m[0]		# m is the matching substring, like c or p{3cm}
+    i = t.index(re)	# i is the position of m in s
+    nnow += 1		# counting how many columns have specifier in s
+    t.sub!(re,' '*m.size)	# replace substring with spaces
+    slast = m		# last matching string
+    ilast = i		# and its position in s
+  end
+  n = ncol - nnow		# we need to add this many column specifiers
+  if n > 0
+    return "%s*{%d}{%s}%s" % [
+      s.slice(0...ilast),
+      n+1,
+      slast,
+      s.slice(ilast+slast.size..-1)
+    ]
+  elsif n == 0
+    return s
+  else
+    Warn "too many (#{nnow}) column specifiers in #{s} for #{ncol} columns"
+  end
+end
+
+legalspecs = {
+         'csv' => '',
+        'tabs' => '',
+     'tabular' => 'clr',
+    'tabularx' => 'Xclr',
+    'tabulary' => 'CJLRXYclr',
+      'ctable' => 'Xclr',
+   'longtable' => 'clr',
+  'longtablex' => 'Xclr',
+}
+defaultspecs = {
+     'tabular' => 'l',
+    'tabularx' => 'X',
+    'tabulary' => 'L',
+      'ctable' => 'X',
+   'longtable' => 'l',
+  'longtablex' => 'X',
+}
+
+formats={}
+eval "formats = { #{DATA.read} }"
+preamble = formats.delete('preamble')
+postamble = formats.delete('postamble')
+
 # Option defaults
-$o = OpenStruct.new(
-  :newline => "\n\t",
-:separator => "\t",
- :surround => '',
-  :verbose => false,
- :mysheets => [],
-  :maxcols => 0,
-)
+ mysheets = []
+  article = false
+   format = 'tabs'
+thinrules = false
+   rotate = false
+  caption = nil
+    label = nil
+    specs = nil
+
+# These are used in ERB only
+[nr=0,nc=0,format,caption,label,rotate,thinrules,article].each do |v|
+   # do nothing, just fool the syntax check
+end
 
 OptionParser.new(
   banner = <<~EOD,
@@ -116,40 +165,60 @@ OptionParser.new(
   indent = ''
 ) do |opts|
  
-   opts.on('-s','--sheets=list',String,
+   opts.on(     '--sheets=list',String,
 	'List the sheets in the comma separated |list|.',
 	'By default, all sheets are listed',
         'The list may contain sheet numbers (counting from 1 up)',
-        'or sheet names'
+        'or sheet names; if the list contains numbers only, all values',
+        'are considered to be numbers; otherwise, all are seen as names'
+
    ) do |v|
-      $o.mysheets = v.split(',')
+      mysheets = v.split(',')
    end
 
-   opts.on('-n','--newline=s',String,
-	'replace newlines wit |s| in multiline cells',
-	'Default: \n\t'
+   opts.on('-c','--caption=STR',String,
+      'set caption to STR'
    ) do |v|
-      $o.newline = v
+      caption = v
    end
 
-   opts.on('-m','--maxcols=n',Integer,
-          'Print |n| columns.',
-          'Default: strip empty cells from the end of the row.'
+   opts.on('-l','--label=STR',String,
+      'set label to STR'
    ) do |v|
-      $o.maxcols = v.to_i
+      label = v
    end
 
-   opts.on('-v','--verbose',
-	'print header above each sheet'
+   opts.on('-f','--format=STR',String,
+      "output format, one of:",
+      "\t#{formats.keys.join("\n\t\t\t")}"
+   ) do |v|
+      format = v
+   end
+
+   opts.on('-s','--specs=STR',String,
+      'column specs, space separated,',
+      'last one repeated as needed',
+      'default: C for tabulary, else X, if possible, else c'
+   ) do |v|
+       specs = v
+   end
+
+   opts.on('-a','--article',
+      'create compilable article document'
    ) do
-      $o.verbose = true
+      article = true
    end
 
-   opts.on('-c','--comma',
-	'set field separator to comma and doublequote fields'
+   opts.on('-r','--rotate',
+      'rotate the paper to landscape'
    ) do
-	$o.separator = '","'
-        $o.surround = '"'
+      rotate = true
+   end
+
+   opts.on('-t','--thinrules',
+      'separate rows with thin rules'
+   ) do
+      thinrules = true
    end
 
    opts.on('-V','--version',
@@ -182,51 +251,200 @@ OptionParser.new(
 end
 
 file = ARGV[0] or die "I need an .ods file"
-file =~ /\.ods$/ or die "My input file needs a .ods extension"
+file = file.sub(/\.ods$/,'')+'.ods'
+File.exist?(file) or die "File #{file} does not exist"
+File.empty?(file) and die "File #{file} is empty"
 
-allsheets = Ods::File.new(file).sheets
+allsheets = Ods::File.new(file).sheets	# all available sheets
+ns = allsheets.size			# no of available sheets
+allnames = allsheets.inject([]) {|a,v| a.push(v.name)}	# their names
 
-ns = allsheets.size
-if $o.mysheets.empty?
-   $o.mysheets = (0...ns).to_a
-else
-   $o.mysheets.map! do |i|
-      if i =~ /^\d+$/
-         i = i.to_i
-         if i.between?(1,ns)
-            i-=1
-         else
-            die "List contains a value (#{i}) outside the range of available sheets (1-#{ns})"
-         end
+# Check if the requested sheets exist
+# Create an array list with sheet numbers to print
+list = mysheets		# sheet numbers or names we want to list
+list.map! do |v|		# scan the entries
+   i = allnames.index(v)	# is it the name of one of the sheets?
+   if i				# if so
+      v = i			# use that sheet
+   else
+      if v =~ /^[1-9][0-9]*$/	# is it a number starting at 1?
+         v = v.to_i
+         v.between?(1,ns) or die "There are only #{ns} sheets",
+				 "and there is no sheet named #{v}"
+         v -= 1
       else
-         rep = nil
-         (0...ns).each do |j|
-            if allsheets[j].name == i
-               rep = j
-               break
-            end
-         end
-         die "no sheet named «#{i}» was found" unless rep
-         rep
+         die "There is no sheet named #{v}"
       end
    end
 end
+# If the list appears to be empty, set it to all sheets:
+list = (0...ns).to_a if list.empty?
 
-$o.mysheets.each do |i|
-   s = allsheets[i]
-   puts "==== Sheet #{i+1}: #{s.name} ====" if $o.verbose
-   s.rows.each do |r|
-      c = r.cols # size is equal to size of largest row (nmax) in the sheet
-      if $o.maxcols == 0
-         while c.size > 0  && c[-1].text.empty?
-            c.pop
-         end
-      else
-         # remove excess cols; there may be less than maxcols cols now!
-         c = c[0...$o.maxcols]
-      end
-      c = c.map { |k| k.content.children.map { |l| l.text }.join($o.newline)}
-      c.push('') while c.size < $o.maxcols 
-      puts $o.surround+c.join($o.separator)+$o.surround
-   end
+specs ||= defaultspecs[format]
+
+puts ERB.new(preamble, trim_mode:'%').result(binding) if specs
+list.each do |i|
+   s=allsheets[i]
+   nr = s.nrow
+   nc = s.ncol
+   sp = testspecs(specs,legalspecs[format]||'',nc)
+   puts ERB.new(formats[format], trim_mode:'%').result(binding)
 end
+puts ERB.new(postamble, trim_mode:'%').result(binding) if specs
+
+__END__
+'preamble' => <<~'EOD',
+	% if article
+	\documentclass[english]{article}
+	\usepackage{ucs}\usepackage[utf8x]{inputenc}
+	\usepackage[a4paper<%= rotate ? ',landscape' : '' %>,margin=20mm,noheadfoot]{geometry}
+	% unless ['tabs','ctable','tabularx','tabular'].index(format)
+	\usepackage{<%= format %>}
+	% end
+	\usepackage{babel,ctable}
+	\def\Tbl#1{\begin{tabular}[t]{@{}l@{}}#1\end{tabular}}
+	\def\H#1{\hsize=#1\hsize\raggedright}
+	\pagestyle{empty}
+	\begin{document}
+	% end
+	EOD
+'postamble' => <<~'EOD',
+	% if article
+	\end{document}
+	% end
+	EOD
+'csv' => <<~'EOD',
+	# ==> Sheet: <%= s.name %>
+	% s.data.each do |r|
+	%   r.map! {|v| v=v.to_s; v='"'+v+'"' if v =~ /,/; v }
+	<%= r.join(',') %>
+	% end
+	EOD
+'tabs' => <<~'EOD',
+	# ==> Sheet: <%= s.name %>
+	% s.unmult.each do |r|
+	<%= r.join("\t") %>
+	% end
+	EOD
+'tabular' => <<~'EOD',
+	%%==> Sheet: <%= s.name %>
+	% if caption
+	\centering{<%= caption %>}\\[1ex]
+	% end
+	% if label
+	\label{<%= label %>}
+	% end
+	\begin{tabular}{<%= sp %>}
+	  \FL
+	% sep='\ML'; i=1; s.data.each do |r|
+	    <%= r.map { |x| x=~/\|/ ? "\\Tbl{"+x.gsub(/\|/,'\\\\\\\\')+"}" : x}.join("\n  & ") %>
+	  <%= sep %>
+	% sep = (i+=1)==nr ? '\LL' : thinrules ? '\ML[.1pt]' : '\NN'
+	% end
+	\end{tabular}
+	<%= article ? '\clearpage' : '' %>
+	EOD
+'tabularx' => <<~'EOD',
+	%%==> Sheet: <%= s.name %> <%= nr %> rows, <%= nc %> columns =======
+	% if caption
+	\centering{<%= caption %>}\\[1ex]
+	% end
+	% if label
+	\label{<%= label %>}
+	% end
+	\begin{tabularx}{\textwidth}{<%= sp %>}
+	  \FL
+	% sep='\ML'; i=1; s.data.each do |r|
+	    <%= r.map { |x| x=~/\|/ ? "\\Tbl{"+x.gsub(/\|/,'\\\\\\\\')+"}" : x}.join("\n  & ") %>
+	  <%= sep %>
+	% sep = (i+=1)==nr ? '\LL' : thinrules ? '\ML[.1pt]' : '\NN'
+	% end
+	\end{tabularx}
+	<%= article ? '\clearpage' : '' %>
+	EOD
+
+'tabulary' => <<~'EOD',
+	%%==> Sheet: <%= s.name %> <%= nr %> rows, <%= nc %> columns =======
+	% if caption
+	\centering{<%= caption %>}\\[1ex]
+	% end
+	% if label
+	\label{<%= label %>}
+	% end
+	\begin{tabulary}{\textwidth}{<%= sp %>}
+	  \FL
+	% sep='\ML'; i=1; s.data.each do |r|
+	    <%= r.map { |x| x=~/\|/ ? "\\Tbl{"+x.gsub(/\|/,'\\\\\\\\')+"}" : x}.join("\n  & ") %>
+	  <%= sep %>
+	% sep = (i+=1)==nr ? '\LL' : thinrules ? '\ML[.1pt]' : '\NN'
+	% end
+	\end{tabulary}
+	<%= article ? '\clearpage' : '' %>
+	EOD
+
+'ctable' => <<~'EOD',
+	%%==> Sheet: <%= s.name %> <%= nr %> rows, <%= nc %> columns =======
+	\ctable[
+	% if caption
+	  caption={<%= caption %>},
+	% end
+	% if label
+	    label={<%= label %>},
+	% end
+	% if sp =~ /X/
+	    width=\textwidth
+	% end
+	]{<%= sp %>}{}{
+	  \FL
+	% sep='\ML'; i=1; s.data.each do |r|
+	    <%= r.map { |x| x=~/\|/ ? "\\Tbl{"+x.gsub(/\|/,'\\\\\\\\')+"}" : x}.join("\n    & ") %>
+	  <%= sep %>
+	% sep = (i+=1)==nr ? '\LL' : thinrules ? '\ML[.1pt]' : '\NN'
+	% end
+	}
+	<%= article ? '\clearpage' : '' %>
+	EOD
+
+'longtable' => <<~'EOD',
+	%%==> Sheet: <%= s.name %> <%= nr %> rows, <%= nc %> columns =======
+	\begin{longtable}[l]{<%= sp %>}
+	% if caption 
+	     \caption{<%= caption %>
+	% end
+	% if label 
+	     \label{<%= label %>}}
+	% end
+	  \ML\endfirsthead
+	  \caption*{<%= caption %> (continued)}
+	  \ML\endhead
+	% sep='\ML'; i=1; s.data.each do |r|
+	    <%= r.map { |x| x=~/\|/ ? "\\Tbl{"+x.gsub(/\|/,'\\\\\\\\')+"}" : x}.join("\n  & ") %>
+	  <%= sep %>
+	% sep = (i+=1)==nr ? '\LL' : thinrules ? '\ML[.1pt]' : '\NN'
+	% end
+	\end{longtable}
+	<%= article ? '\clearpage' : '' %>
+	EOD
+
+'longtablex' => <<~'EOD',
+	%%==> Sheet: <%= s.name %> <%= nr %> rows, <%= nc %> columns =======
+	%%\keepXColumns % uncomment to spread table over full width
+	\begin{longtablex}{\textwidth}[l]{<%= sp %>}
+	% if caption 
+	     \caption{<%= caption %>
+	% end
+	% if label 
+	     \label{<%= label %>}}
+	% end
+	  \ML\endfirsthead
+	  \caption*{<%= caption %> (continued)}
+	  \ML\endhead
+	% sep='\ML'; i=1; s.data.each do |r|
+	    <%= r.map { |x| x=~/\|/ ? "\\Tbl{"+x.gsub(/\|/,'\\\\\\\\')+"}" : x}.join("\n  & ") %>
+	  <%= sep %>
+	% sep = (i+=1)==nr ? '\LL' : thinrules ? '\ML[.1pt]' : '\NN'
+	% end
+	\end{longtablex}
+	<%= article ? '\clearpage' : '' %>
+	EOD
+
